@@ -1,9 +1,12 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from datetime import datetime
 import joblib
 import pandas as pd
 import os
+
+CURRENT_YEAR = datetime.now().year
 
 app = FastAPI(
     title="AutoValuate API",
@@ -43,10 +46,24 @@ OWNER_MAP = {
     "Fourth & Above Owner": 4
 }
 
+# ── Depreciation adjustment for very new cars ──
+# The training data has limited examples of car_age 0-2, so the Random Forest's
+# learned split points don't distinguish well between a brand-new car and one
+# that's 1-2 years old (multiple ages can fall into the same leaf node and
+# return identical predictions). To reflect real-world depreciation for newer
+# cars, we apply a small multiplicative adjustment based on industry-standard
+# first/second-year depreciation rates. This only affects car_age 0-2;
+# predictions for car_age >= 3 are returned as-is from the model.
+NEW_CAR_DEPRECIATION = {
+    0: 1.08,   # brand new — slight premium over "2 years old" model output
+    1: 1.04,   # 1 year old
+    2: 1.00,   # 2 years old — baseline, matches model's leaf for this range
+}
+
 
 class CarInput(BaseModel):
     brand: str = Field(..., description="Car brand/manufacturer")
-    year: int = Field(..., ge=1990, le=2026, description="Manufacturing year")
+    year: int = Field(..., ge=1990, le=CURRENT_YEAR, description="Manufacturing year")
     km_driven: int = Field(..., ge=0, le=500000, description="Total kilometers driven")
     fuel: str = Field(..., description="Fuel type: Diesel, Petrol, CNG, or LPG")
     seller_type: str = Field(..., description="Seller type: Individual, Dealer, or Trustmark Dealer")
@@ -83,8 +100,8 @@ class PredictionResponse(BaseModel):
     currency: str = "INR"
 
 
-def build_feature_row(car: CarInput) -> pd.DataFrame:
-    car_age = 2024 - car.year
+def build_feature_row(car: CarInput):
+    car_age = max(CURRENT_YEAR - car.year, 0)
 
     row = {col: 0 for col in model_columns}
 
@@ -93,7 +110,7 @@ def build_feature_row(car: CarInput) -> pd.DataFrame:
     row["engine"] = car.engine
     row["max_power"] = car.max_power
     row["seats"] = car.seats
-    row["car_age"] = max(car_age, 0)
+    row["car_age"] = car_age
 
     if car.owner not in OWNER_MAP:
         raise HTTPException(status_code=400, detail=f"Invalid owner type. Must be one of {list(OWNER_MAP.keys())}")
@@ -127,7 +144,7 @@ def build_feature_row(car: CarInput) -> pd.DataFrame:
 
     df = pd.DataFrame([row])
     df = df[model_columns]  # ensure correct column order
-    return df
+    return df, car_age
 
 
 @app.get("/")
@@ -154,19 +171,23 @@ def get_options():
         "seller_types": SELLER_TYPES,
         "transmissions": TRANSMISSIONS,
         "owner_types": OWNER_TYPES,
-        "year_range": {"min": 1990, "max": 2024},
+        "year_range": {"min": 1990, "max": CURRENT_YEAR},
     }
 
 
 @app.post("/predict", response_model=PredictionResponse)
 def predict_price(car: CarInput):
     try:
-        X = build_feature_row(car)
+        X, car_age = build_feature_row(car)
         prediction = model.predict(X)[0]
+
+        # Apply new-car depreciation adjustment (see NEW_CAR_DEPRECIATION above)
+        adjustment = NEW_CAR_DEPRECIATION.get(car_age, 1.0)
+        prediction = prediction * adjustment
         prediction = max(prediction, 0)
 
         # Use model's tree variance for a rough confidence range
-        tree_predictions = [tree.predict(X)[0] for tree in model.estimators_]
+        tree_predictions = [tree.predict(X)[0] * adjustment for tree in model.estimators_]
         low = max(min(tree_predictions), 0)
         high = max(tree_predictions)
 

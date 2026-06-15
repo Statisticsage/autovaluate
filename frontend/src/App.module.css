@@ -65,8 +65,25 @@
 }
 
 .intro {
-  max-width: 640px;
+  position: relative;
+  max-width: 100%;
+  min-height: 380px;
   margin-bottom: 2.5rem;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+}
+
+.introContent {
+  position: relative;
+  z-index: 1;
+  max-width: 640px;
+  padding: 2rem 0.25rem 1.5rem;
+}
+
+@media (max-width: 640px) {
+  .intro { min-height: 320px; }
 }
 
 .eyebrow {
@@ -331,6 +348,16 @@
 .resultCaption {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.disclaimer {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  max-width: 380px;
+  margin: 0.75rem auto 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle);
 }
 
 /* ── 3D Visualization Section ── */
